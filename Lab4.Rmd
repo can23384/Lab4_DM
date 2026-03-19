@@ -1,0 +1,163 @@
+---
+title: "Lab4"
+output: html_document
+date: "2026-03-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+
+# Link de GitHub:
+https://github.com/can23384/Lab4_DM.git
+
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(rsample)
+library(janitor)
+library(lubridate)
+library(rpart)
+
+```
+
+```{r cargar-rdata}
+tmp_env <- new.env()
+load("listings.RData", envir = tmp_env)
+
+ls(tmp_env)
+
+objetos <- mget(ls(tmp_env), envir = tmp_env)
+
+listings <- objetos %>%
+  keep(~ is.data.frame(.x)) %>%
+  .[[1]]
+
+```
+
+```{r limpieza-basica}
+parse_money_clean <- function(x) {
+  if (is.numeric(x)) return(x)
+  x %>%
+    as.character() %>%
+    str_replace_all("\\$", "") %>%
+    str_replace_all(",", "") %>%
+    str_trim() %>%
+    na_if("") %>%
+    as.numeric()
+}
+
+parse_percent_clean <- function(x) {
+  if (is.numeric(x)) return(x)
+  x %>%
+    as.character() %>%
+    str_replace_all("%", "") %>%
+    str_trim() %>%
+    na_if("") %>%
+    as.numeric()
+}
+
+listings <- listings %>%
+  clean_names()
+
+if ("price" %in% names(listings)) {
+  listings <- listings %>% mutate(price = parse_money_clean(price))
+}
+
+if ("host_response_rate" %in% names(listings)) {
+  listings <- listings %>% mutate(host_response_rate = parse_percent_clean(host_response_rate))
+}
+
+if ("host_acceptance_rate" %in% names(listings)) {
+  listings <- listings %>% mutate(host_acceptance_rate = parse_percent_clean(host_acceptance_rate))
+}
+
+cols_fecha <- c("host_since", "first_review", "last_review", "last_scraped")
+cols_fecha <- cols_fecha[cols_fecha %in% names(listings)]
+
+if (length(cols_fecha) > 0) {
+  listings <- listings %>%
+    mutate(across(all_of(cols_fecha), ~ suppressWarnings(ymd(.x))))
+}
+
+glimpse(listings)
+```
+
+# 1. Use los mismos conjuntos de entrenamiento y prueba que usó para los modelos de regresión lineal en la entrega anterior.
+
+```{r train-test}
+set.seed(123)
+
+split_master <- initial_split(
+  listings,
+  prop = 0.80,
+  strata = price
+)
+
+train_data <- training(split_master)
+test_data  <- testing(split_master)
+
+dim(train_data)
+dim(test_data)
+```
+
+```{r alinear-factores}
+factor_cols <- names(train_data)[sapply(train_data, is.factor)]
+
+for (col in factor_cols) {
+  if (col %in% names(test_data)) {
+    test_data[[col]] <- factor(test_data[[col]], levels = levels(train_data[[col]]))
+  }
+}
+```
+
+```{r preparar-modelo-precio}
+vars_quitar <- intersect(
+  names(train_data),
+  c(
+    "listing_url", "picture_url", "host_url", "host_thumbnail_url", "host_picture_url",
+    "name", "description", "neighborhood_overview", "amenities",
+    "scrape_id", "id", "host_id"
+  )
+)
+
+train_model <- train_data %>% select(-all_of(vars_quitar))
+test_model  <- test_data  %>% select(-all_of(vars_quitar))
+
+prop_na <- sapply(train_model, function(x) mean(is.na(x)))
+cols_muchos_na <- names(prop_na[prop_na > 0.40])
+
+train_model <- train_model %>% select(-all_of(cols_muchos_na))
+test_model  <- test_model  %>% select(-all_of(cols_muchos_na))
+
+train_model <- train_model %>% drop_na()
+test_model  <- test_model %>% drop_na()
+
+dim(train_model)
+dim(test_model)
+```
+
+# 2. Elabore un árbol de regresión para predecir el precio de las casas por noche usando todas las variables.
+
+
+```{r arbol-regresion}
+arbol_precio <- rpart(
+  formula = price ~ .,
+  data = train_data,
+  method = "anova",
+  control = rpart.control(
+    cp = 0.001,
+    minsplit = 20,
+    maxdepth = 10
+  )
+)
+
+print(arbol_precio)
+summary(arbol_precio)
+```
+
