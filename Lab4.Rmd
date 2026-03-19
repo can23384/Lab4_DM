@@ -23,7 +23,7 @@ library(rsample)
 library(janitor)
 library(lubridate)
 library(rpart)
-
+library(rpart.plot)
 ```
 
 ```{r cargar-rdata}
@@ -85,7 +85,9 @@ if (length(cols_fecha) > 0) {
     mutate(across(all_of(cols_fecha), ~ suppressWarnings(ymd(.x))))
 }
 
-glimpse(listings)
+listings <- listings %>%
+  select(where(~ !is.list(.x))) %>%
+  mutate(across(where(is.character), as.factor))
 ```
 
 # 1. Use los mismos conjuntos de entrenamiento y prueba que usó para los modelos de regresión lineal en la entrega anterior.
@@ -120,27 +122,32 @@ for (col in factor_cols) {
 vars_quitar <- intersect(
   names(train_data),
   c(
-    "listing_url", "picture_url", "host_url", "host_thumbnail_url", "host_picture_url",
-    "name", "description", "neighborhood_overview", "amenities",
-    "scrape_id", "id", "host_id"
+    "id", "listing_url", "scrape_id", "source", "name", "description",
+    "neighborhood_overview", "picture_url", "host_id", "host_url",
+    "host_name", "host_location", "host_about",
+    "host_thumbnail_url", "host_picture_url",
+    "license", "amenities"
   )
 )
 
 train_model <- train_data %>% select(-all_of(vars_quitar))
 test_model  <- test_data  %>% select(-all_of(vars_quitar))
 
+# quitar columnas con demasiados NA, pero conservar price
 prop_na <- sapply(train_model, function(x) mean(is.na(x)))
 cols_muchos_na <- names(prop_na[prop_na > 0.40])
+cols_muchos_na <- setdiff(cols_muchos_na, "price")
 
 train_model <- train_model %>% select(-all_of(cols_muchos_na))
-test_model  <- test_model  %>% select(-all_of(cols_muchos_na))
+test_model  <- test_model %>% select(-all_of(cols_muchos_na))
 
-train_model <- train_model %>% drop_na()
-test_model  <- test_model %>% drop_na()
+train_model <- train_model %>% filter(!is.na(price)) %>% drop_na()
+test_model  <- test_model %>% filter(!is.na(price)) %>% drop_na()
 
-dim(train_model)
-dim(test_model)
+names(train_model)
 ```
+
+
 
 # 2. Elabore un árbol de regresión para predecir el precio de las casas por noche usando todas las variables.
 
@@ -148,7 +155,7 @@ dim(test_model)
 ```{r arbol-regresion}
 arbol_precio <- rpart(
   formula = price ~ .,
-  data = train_data,
+  data = train_model,
   method = "anova",
   control = rpart.control(
     cp = 0.001,
@@ -157,7 +164,176 @@ arbol_precio <- rpart(
   )
 )
 
-print(arbol_precio)
-summary(arbol_precio)
 ```
 
+```{r tabla-cp}
+printcp(arbol_precio)
+plotcp(arbol_precio)
+
+mejor_cp <- arbol_precio$cptable[which.min(arbol_precio$cptable[, "xerror"]), "CP"]
+mejor_cp
+```
+
+
+```{r podar-arbol}
+arbol_podado <- prune(arbol_precio, cp = mejor_cp)
+
+```
+
+```{r graficar-arbol, fig.width=14, fig.height=8}
+rpart.plot(
+  arbol_podado,
+  type = 3,
+  extra = 101,
+  fallen.leaves = TRUE,
+  cex = 0.6
+)
+```
+# 3. Úselo para predecir y analice el resultado. ¿Qué tal lo hizo?
+
+```{r predicciones}
+pred_train <- predict(arbol_podado, newdata = train_data)
+pred_test  <- predict(arbol_podado, newdata = test_data)
+
+head(pred_test)
+```
+
+
+```{r metricas}
+rmse <- function(obs, pred) sqrt(mean((obs - pred)^2, na.rm = TRUE))
+mae  <- function(obs, pred) mean(abs(obs - pred), na.rm = TRUE)
+r2   <- function(obs, pred) 1 - sum((obs - pred)^2, na.rm = TRUE) / sum((obs - mean(obs, na.rm = TRUE))^2, na.rm = TRUE)
+
+resultados <- tibble(
+  conjunto = c("Entrenamiento", "Prueba"),
+  RMSE = c(rmse(train_data$price, pred_train), rmse(test_data$price, pred_test)),
+  MAE  = c(mae(train_data$price, pred_train),  mae(test_data$price, pred_test)),
+  R2   = c(r2(train_data$price, pred_train),   r2(test_data$price, pred_test))
+)
+
+resultados
+```
+
+
+```{r metricas}
+rmse <- function(obs, pred) sqrt(mean((obs - pred)^2, na.rm = TRUE))
+mae  <- function(obs, pred) mean(abs(obs - pred), na.rm = TRUE)
+r2   <- function(obs, pred) 1 - sum((obs - pred)^2, na.rm = TRUE) / sum((obs - mean(obs, na.rm = TRUE))^2, na.rm = TRUE)
+
+resultados <- tibble(
+  conjunto = c("Entrenamiento", "Prueba"),
+  RMSE = c(rmse(train_data$price, pred_train), rmse(test_data$price, pred_test)),
+  MAE  = c(mae(train_data$price, pred_train),  mae(test_data$price, pred_test)),
+  R2   = c(r2(train_data$price, pred_train),   r2(test_data$price, pred_test))
+)
+
+resultados
+```
+
+```{r importancia}
+importancia <- arbol_podado$variable.importance
+
+importancia_df <- tibble(
+  variable = names(importancia),
+  importancia = as.numeric(importancia)
+) %>%
+  arrange(desc(importancia))
+
+importancia_df
+```
+
+
+
+El árbol de regresión se utilizó para predecir el precio por noche en los conjuntos de entrenamiento y prueba. Sin embargo, su desempeño fue deficiente. En el conjunto de prueba se obtuvo un RMSE de 4430.53, un MAE de 720.92 y un R² de -0.2221. El valor negativo de R² indica que el árbol predice peor que una estimación basada únicamente en el promedio del precio. Además, muchas predicciones toman valores muy similares, lo que sugiere que el modelo no logra capturar adecuadamente la variabilidad del precio. En conclusión, el árbol, tal como fue ajustado, no ofrece un buen desempeño predictivo.
+
+
+# 4. Haga, al menos, 3 modelos más, cambiando el parámetro de la profundidad del árbol. ¿Cuál es el mejor modelo para predecir el precio por noche?
+
+```{r modelos-profundidad}
+rmse <- function(obs, pred) sqrt(mean((obs - pred)^2, na.rm = TRUE))
+mae  <- function(obs, pred) mean(abs(obs - pred), na.rm = TRUE)
+r2   <- function(obs, pred) {
+  1 - sum((obs - pred)^2, na.rm = TRUE) / 
+    sum((obs - mean(obs, na.rm = TRUE))^2, na.rm = TRUE)
+}
+
+profundidades <- c(3, 5, 7, 9)
+
+resultados_modelos <- data.frame()
+modelos_arbol <- list()
+
+for (d in profundidades) {
+  
+  modelo <- rpart(
+    formula = price ~ .,
+    data = train_model,
+    method = "anova",
+    control = rpart.control(
+      cp = 0.001,
+      minsplit = 20,
+      maxdepth = d
+    )
+  )
+  
+  pred_train <- predict(modelo, newdata = train_model)
+  pred_test  <- predict(modelo, newdata = test_model)
+  
+  resultados_modelos <- rbind(
+    resultados_modelos,
+    data.frame(
+      maxdepth = d,
+      RMSE_train = rmse(train_model$price, pred_train),
+      MAE_train  = mae(train_model$price, pred_train),
+      R2_train   = r2(train_model$price, pred_train),
+      RMSE_test  = rmse(test_model$price, pred_test),
+      MAE_test   = mae(test_model$price, pred_test),
+      R2_test    = r2(test_model$price, pred_test)
+    )
+  )
+  
+  modelos_arbol[[paste0("depth_", d)]] <- modelo
+}
+
+resultados_modelos
+```
+```{r mejor-modelo}
+resultados_modelos %>%
+  arrange(RMSE_test)
+```
+```{r seleccionar-mejor}
+mejor_fila <- resultados_modelos %>%
+  arrange(RMSE_test) %>%
+  slice(1)
+
+mejor_fila
+```
+```{r graficar-mejor-arbol, fig.width=14, fig.height=8}
+mejor_depth <- mejor_fila$maxdepth
+mejor_modelo <- modelos_arbol[[paste0("depth_", mejor_depth)]]
+
+rpart.plot(
+  mejor_modelo,
+  type = 3,
+  extra = 101,
+  fallen.leaves = TRUE,
+  cex = 0.7
+)
+```
+```{r importancia-mejor-modelo}
+importancia <- mejor_modelo$variable.importance
+
+importancia_df <- tibble(
+  variable = names(importancia),
+  importancia = as.numeric(importancia)
+) %>%
+  arrange(desc(importancia))
+
+importancia_df
+```
+
+
+Se compararon cuatro árboles de regresión variando la profundidad máxima (maxdepth = 3, 5, 7 y 9). El mejor modelo fue el de profundidad 7, ya que presentó el menor RMSE en el conjunto de prueba (1186.132), el menor MAE (225.6859) y el mayor R² (0.7211). Por lo tanto, este modelo fue el que mostró el mejor desempeño predictivo para estimar el precio por noche.
+Este modelo logró el menor error de predicción y el mayor poder explicativo en prueba. Sin embargo, la mejora respecto al árbol con profundidad 5 fue pequeña, por lo que no se trata de una diferencia enorme, sino de una ventaja moderada.
+
+
+# 5. Compare los resultados con el modelo de regresión lineal de la hoja anterior, ¿cuál lo hizo mejor?
