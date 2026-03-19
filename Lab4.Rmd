@@ -17,7 +17,7 @@ knitr::opts_chunk$set(
 https://github.com/can23384/Lab4_DM.git
 
 
-```{r setup, message=FALSE, warning=FALSE}
+```{r}
 library(tidyverse)
 library(rsample)
 library(janitor)
@@ -189,6 +189,8 @@ rpart.plot(
   cex = 0.6
 )
 ```
+
+
 # 3. Úselo para predecir y analice el resultado. ¿Qué tal lo hizo?
 
 ```{r predicciones}
@@ -215,20 +217,6 @@ resultados
 ```
 
 
-```{r metricas}
-rmse <- function(obs, pred) sqrt(mean((obs - pred)^2, na.rm = TRUE))
-mae  <- function(obs, pred) mean(abs(obs - pred), na.rm = TRUE)
-r2   <- function(obs, pred) 1 - sum((obs - pred)^2, na.rm = TRUE) / sum((obs - mean(obs, na.rm = TRUE))^2, na.rm = TRUE)
-
-resultados <- tibble(
-  conjunto = c("Entrenamiento", "Prueba"),
-  RMSE = c(rmse(train_data$price, pred_train), rmse(test_data$price, pred_test)),
-  MAE  = c(mae(train_data$price, pred_train),  mae(test_data$price, pred_test)),
-  R2   = c(r2(train_data$price, pred_train),   r2(test_data$price, pred_test))
-)
-
-resultados
-```
 
 ```{r importancia}
 importancia <- arbol_podado$variable.importance
@@ -337,3 +325,54 @@ Este modelo logró el menor error de predicción y el mayor poder explicativo en
 
 
 # 5. Compare los resultados con el modelo de regresión lineal de la hoja anterior, ¿cuál lo hizo mejor?
+Al comparar el mejor árbol de regresión con los modelos de regresión lineal del laboratorio anterior, se observa que el árbol con maxdepth = 7 presentó el mejor desempeño predictivo. Entre los modelos lineales, el mejor fue el modelo reducido, con RMSE = 2442.887, MAE = 256.8089 y R² = 0.0323 en el conjunto de prueba. En cambio, el árbol obtuvo RMSE = 1186.132, MAE = 225.6859 y R² = 0.7211. Por lo tanto, el árbol de regresión predijo mejor el precio por noche, especialmente porque redujo de forma importante el RMSE.
+
+Mejor árbol: maxdepth = 7
+
+RMSE_test = 1186.132
+
+MAE_test = 225.6859
+
+R²_test = 0.7211
+
+
+Mejor lineal: modelo reducido
+RMSE_test = 2442.887
+
+MAE_test = 256.8089
+
+R²_test = 0.0323
+
+# 6. Dependiendo del análisis exploratorio elaborado cree una variable respuesta que le permita clasificar las casas en Económicas, Intermedias o Caras. Los límites de estas clases deben tener un fundamento en la distribución de los datos de precios, y estar bien explicados.
+
+```{r variable-respuesta-precio}
+listings <- listings %>%
+  mutate(
+    categoria_precio = case_when(
+      is.na(price) ~ NA_character_,
+      price <= 119 ~ "Económica",
+      price > 119 & price <= 323 ~ "Intermedia",
+      price > 323 ~ "Cara"
+    )
+  )
+
+listings$categoria_precio <- factor(
+  listings$categoria_precio,
+  levels = c("Económica", "Intermedia", "Cara")
+)
+
+table(listings$categoria_precio, useNA = "ifany")
+prop.table(table(listings$categoria_precio))
+```
+```{r resumen-categorias}
+listings %>%
+  count(categoria_precio) %>%
+  mutate(proporcion = n / sum(n))
+```
+
+
+Para construir una variable respuesta que permitiera clasificar las propiedades en Económicas, Intermedias y Caras, se utilizaron puntos de corte basados en la distribución empírica del precio por noche. Dado que en el análisis exploratorio se observó que la variable price presenta una distribución fuertemente asimétrica hacia la derecha y con presencia de valores extremos, no resultaba adecuado definir las categorías usando intervalos de igual amplitud o la media. En su lugar, se emplearon los cuartiles de la distribución, ya que son medidas más robustas ante la existencia de outliers y reflejan mejor la concentración real de los datos.
+
+Con este criterio, se definieron como Económicas las propiedades con price <= 119, como Intermedias aquellas con 119 < price <= 323, y como Caras las propiedades con price > 323. Estos puntos de corte corresponden al primer cuartil y al tercer cuartil de la distribución del precio, por lo que la clasificación distingue el segmento inferior, el segmento central y el segmento superior del mercado.
+
+Al aplicar esta clasificación al conjunto de datos, se obtuvo que 18,897 propiedades quedaron en la categoría Económica, 38,000 en Intermedia y 19,349 en Cara. Sin embargo, también se identificaron 95,502 observaciones sin clasificación debido a valores faltantes en la variable price. Por esta razón, para los análisis posteriores de clasificación solo deben considerarse las observaciones con precio disponible. Entre las propiedades clasificadas, la categoría Intermedia concentra la mayor proporción, mientras que las categorías Económica y Cara presentan tamaños más parecidos.
