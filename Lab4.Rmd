@@ -376,3 +376,103 @@ Para construir una variable respuesta que permitiera clasificar las propiedades 
 Con este criterio, se definieron como Económicas las propiedades con price <= 119, como Intermedias aquellas con 119 < price <= 323, y como Caras las propiedades con price > 323. Estos puntos de corte corresponden al primer cuartil y al tercer cuartil de la distribución del precio, por lo que la clasificación distingue el segmento inferior, el segmento central y el segmento superior del mercado.
 
 Al aplicar esta clasificación al conjunto de datos, se obtuvo que 18,897 propiedades quedaron en la categoría Económica, 38,000 en Intermedia y 19,349 en Cara. Sin embargo, también se identificaron 95,502 observaciones sin clasificación debido a valores faltantes en la variable price. Por esta razón, para los análisis posteriores de clasificación solo deben considerarse las observaciones con precio disponible. Entre las propiedades clasificadas, la categoría Intermedia concentra la mayor proporción, mientras que las categorías Económica y Cara presentan tamaños más parecidos.
+
+# 7:
+
+```{r preparar-clasificacion}
+
+datos_clas <- listings %>%
+  filter(!is.na(categoria_precio)) %>%
+  select(-any_of(c("price", "log_price", "estimated_revenue_l365d")))
+
+```
+
+
+```{r split-clasificacion}
+set.seed(123)
+
+split_clas <- initial_split(
+  datos_clas,
+  prop = 0.80,
+  strata = categoria_precio
+)
+
+train_clas <- training(split_clas)
+test_clas  <- testing(split_clas)
+```
+
+
+
+```{r}
+vars_modelo <- c(
+  "categoria_precio",
+  "accommodates",
+  "bathrooms",
+  "bedrooms",
+  "beds",
+  "room_type"
+)
+
+train_clas2 <- train_clas %>%
+  select(any_of(vars_modelo)) %>%
+  drop_na() %>%
+  as.data.frame()
+
+test_clas2 <- test_clas %>%
+  select(any_of(vars_modelo)) %>%
+  drop_na() %>%
+  as.data.frame()
+```
+
+```{r arbol-clasificacion-final-rapido}
+arbol_clas <- rpart(
+  categoria_precio ~ accommodates + bathrooms + bedrooms + beds + room_type,
+  data = train_clas2,
+  method = "class",
+  control = rpart.control(
+    cp = 0.02,
+    minsplit = 100,
+    maxdepth = 3,
+    xval = 0,
+    maxcompete = 0,
+    maxsurrogate = 0,
+    usesurrogate = 0
+  )
+)
+
+```
+
+```{r}
+print(arbol_clas)
+```
+
+```{r}
+rpart.plot(
+  arbol_clas,
+  type = 3,
+  extra = 104,
+  fallen.leaves = TRUE,
+  cex = 0.8
+)
+```
+
+
+```{r}
+pred_test_clas <- predict(arbol_clas, newdata = test_clas2, type = "class")
+
+```
+
+```{r}
+matriz_confusion <- table(
+  Real = test_clas2$categoria_precio,
+  Predicho = pred_test_clas
+)
+
+matriz_confusion
+```
+```{r}
+accuracy <- mean(pred_test_clas == test_clas2$categoria_precio)
+accuracy
+```
+
+Se construyó un árbol de clasificación para predecir la variable categoria_precio, definida en tres clases: Económica, Intermedia y Cara. Dado que esta variable fue creada a partir del precio, no se incluyó price como predictor en el modelo. Para facilitar la estimación y evitar tiempos excesivos de cómputo, el árbol se ajustó usando un conjunto reducido de variables explicativas: capacidad de alojamiento, número de baños, número de habitaciones, número de camas y tipo de habitación. Posteriormente, el modelo se evaluó en el conjunto de prueba mediante una matriz de confusión y la exactitud global.
